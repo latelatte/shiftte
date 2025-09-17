@@ -2,7 +2,7 @@ from __future__ import annotations
 import tempfile
 from typing import List, Optional
 import re
-import pdfplumber
+import tabula
 import pandas as pd
 
 MD_RE = re.compile(r"^\s*(\d{1,2})/(\d{1,2})\s*$")
@@ -11,45 +11,30 @@ def _looks_like_md(s: str) -> bool:
     return bool(MD_RE.match(str(s)))
 
 def read_pdf_table(pdf_bytes: bytes) -> pd.DataFrame:
-    """PDFの表をpdfplumberで読み込み、最適なテーブルを採用。"""
+    """PDFの表をTabulaで読み込み、最も列数が多いテーブルを採用。"""
     with tempfile.NamedTemporaryFile(suffix=".pdf") as fp:
         fp.write(pdf_bytes)
         fp.flush()
-        
-        tables_data = []
-        
-        with pdfplumber.open(fp.name) as pdf:
-            for page in pdf.pages:
-                # 表を抽出
-                tables = page.extract_tables()
+        # lattice & stream を両方試す→列数最大のものを採用
+        dfs: List[pd.DataFrame] = []
+        for mode in ("lattice", "stream"):
+            try:
+                tables = tabula.read_pdf(
+                    fp.name, pages="all", multiple_tables=True,
+                    lattice=(mode=="lattice"), stream=(mode=="stream")
+                )
                 if tables:
-                    for table in tables:
-                        if not table or len(table) < 2:  # ヘッダー+データ行が最低限必要
-                            continue
-                        
-                        # 表をDataFrameに変換
-                        try:
-                            df = pd.DataFrame(table[1:], columns=table[0])  # 最初の行をヘッダーとする
-                            if df.shape[1] > 2:  # 最低限の列数が必要
-                                tables_data.append(df)
-                        except Exception:
-                            # ヘッダーがない場合の対処
-                            try:
-                                df = pd.DataFrame(table)
-                                if df.shape[1] > 2:
-                                    tables_data.append(df)
-                            except Exception:
-                                continue
-        
-        if not tables_data:
+                    dfs.extend(tables)
+            except Exception:
+                pass
+        if not dfs:
             raise ValueError("表が検出できませんでした。PDFのフォーマットを確認してください。")
 
-        # 最も列数が多いテーブルを採用
-        df = max(tables_data, key=lambda d: d.shape[1])
+        df = max(dfs, key=lambda d: d.shape[1])  # 列数が多い=表らしい
         df = df.reset_index(drop=True)
 
         # 列名の空欄対策：文字列化
-        df.columns = [str(c).strip() if str(c).strip() and str(c) != 'nan' else f"col_{i}" for i, c in enumerate(df.columns)]
+        df.columns = [str(c).strip() if str(c).strip() else f"col_{i}" for i, c in enumerate(df.columns)]
         return df
 
 def normalize_table(df: pd.DataFrame) -> tuple[pd.DataFrame, List[str]]:

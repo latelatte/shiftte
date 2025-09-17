@@ -3,7 +3,8 @@ uvicorn[standard]
 jinja2
 python-multipart
 pandas
-pdfplumber
+tabula-py
+jpype1
 python-dateutil
 google-api-python-client
 google-auth
