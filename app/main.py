@@ -92,6 +92,76 @@ def _tz_dt(date_str: str, time_str: str, plus_one: bool = False) -> str:
     jst = timezone(timedelta(hours=9))
     return dt.replace(tzinfo=jst).isoformat()
 
+@app.get("/debug/java")
+async def debug_java():
+    """Java環境のデバッグ情報を取得"""
+    import subprocess
+    import os
+    
+    debug_info = {}
+    
+    # JAVA_HOME環境変数
+    debug_info["JAVA_HOME"] = os.environ.get("JAVA_HOME", "Not set")
+    
+    # PATH環境変数
+    debug_info["PATH"] = os.environ.get("PATH", "Not set")
+    
+    # Javaバージョン確認
+    try:
+        result = subprocess.run(["java", "-version"], capture_output=True, text=True, timeout=10)
+        debug_info["java_version"] = {
+            "stdout": result.stdout,
+            "stderr": result.stderr,
+            "returncode": result.returncode
+        }
+    except Exception as e:
+        debug_info["java_version"] = f"Error: {str(e)}"
+    
+    # jpype1の状態確認
+    try:
+        import jpype
+        debug_info["jpype_available"] = True
+        debug_info["jpype_version"] = jpype.__version__
+        
+        # JVMの起動テスト
+        try:
+            if not jpype.isJVMStarted():
+                jpype.startJVM()
+            debug_info["jvm_started"] = jpype.isJVMStarted()
+            debug_info["jvm_info"] = {
+                "version": jpype.java.lang.System.getProperty("java.version"),
+                "vendor": jpype.java.lang.System.getProperty("java.vendor"),
+                "home": jpype.java.lang.System.getProperty("java.home")
+            }
+        except Exception as e:
+            debug_info["jvm_error"] = str(e)
+            
+    except ImportError:
+        debug_info["jpype_available"] = False
+    except Exception as e:
+        debug_info["jpype_error"] = str(e)
+    
+    # tabula-pyのテスト
+    try:
+        import tabula
+        debug_info["tabula_available"] = True
+        debug_info["tabula_version"] = tabula.__version__
+        
+        # tabula-javaのjarファイルの場所を確認
+        try:
+            jar_path = tabula.io._jar_path()
+            debug_info["tabula_jar_path"] = jar_path
+            debug_info["tabula_jar_exists"] = os.path.exists(jar_path)
+        except Exception as e:
+            debug_info["tabula_jar_error"] = str(e)
+            
+    except ImportError:
+        debug_info["tabula_available"] = False
+    except Exception as e:
+        debug_info["tabula_error"] = str(e)
+    
+    return {"debug_info": debug_info}
+
 @app.get("/", response_class=HTMLResponse)
 async def index(request: Request):
     authed = bool(request.session.get("credentials"))
