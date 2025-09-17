@@ -1,5 +1,5 @@
 fastapi
-uvicorn
+uvicorn[standard]
 jinja2
 python-multipart
 pandas
@@ -9,3 +9,5 @@ google-api-python-client
 google-auth
 google-auth-oauthlib
 itsdangerous
+python-dotenv
+starlette

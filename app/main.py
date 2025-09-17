@@ -15,8 +15,10 @@ from app.services.transform import load_code_map, to_events
 from dotenv import load_dotenv
 load_dotenv()
 
-#! 開発環境でHTTPを許可（本番環境では削除すること）
-os.environ['OAUTHLIB_INSECURE_TRANSPORT'] = '1'
+# 本番環境（Heroku）では HTTPS を要求
+# 開発環境でのみ HTTP を許可
+if os.getenv("ENVIRONMENT") == "development":
+    os.environ['OAUTHLIB_INSECURE_TRANSPORT'] = '1'
 
 app = FastAPI()
 app.add_middleware(SessionMiddleware, secret_key=os.getenv("SESSION_SECRET", "dev-secret"))
@@ -36,7 +38,9 @@ SCOPES = [
 ]
 CLIENT_ID = os.getenv("GOOGLE_CLIENT_ID")
 CLIENT_SECRET = os.getenv("GOOGLE_CLIENT_SECRET")
-REDIRECT_URI = os.getenv("GOOGLE_REDIRECT_URI", "http://127.0.0.1:8000/auth/callback")
+# 本番環境とローカル環境でリダイレクトURIを切り替え
+BASE_URL = os.getenv("BASE_URL", "http://127.0.0.1:8000")
+REDIRECT_URI = f"{BASE_URL}/auth/callback"
 
 
 @app.get("/api/calendars")
