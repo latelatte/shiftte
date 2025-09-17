@@ -10,31 +10,132 @@ MD_RE = re.compile(r"^\s*(\d{1,2})/(\d{1,2})\s*$")
 def _looks_like_md(s: str) -> bool:
     return bool(MD_RE.match(str(s)))
 
+def _try_pdfplumber_fallback(pdf_bytes: bytes) -> Optional[pd.DataFrame]:
+    """pdfplumberを使ったフォールバック処理"""
+    try:
+        import pdfplumber
+        print("Trying pdfplumber as fallback...")
+        
+        with tempfile.NamedTemporaryFile(suffix=".pdf") as fp:
+            fp.write(pdf_bytes)
+            fp.flush()
+            
+            tables_data = []
+            
+            with pdfplumber.open(fp.name) as pdf:
+                for page_num, page in enumerate(pdf.pages):
+                    print(f"Processing page {page_num + 1} with pdfplumber")
+                    # 表を抽出
+                    tables = page.extract_tables()
+                    if tables:
+                        print(f"Found {len(tables)} tables on page {page_num + 1}")
+                        for table in tables:
+                            if not table or len(table) < 2:  # ヘッダー+データ行が最低限必要
+                                continue
+                            
+                            # 表をDataFrameに変換
+                            try:
+                                df = pd.DataFrame(table[1:], columns=table[0])  # 最初の行をヘッダーとする
+                                if df.shape[1] > 2:  # 最低限の列数が必要
+                                    tables_data.append(df)
+                            except Exception:
+                                # ヘッダーがない場合の対処
+                                try:
+                                    df = pd.DataFrame(table)
+                                    if df.shape[1] > 2:
+                                        tables_data.append(df)
+                                except Exception:
+                                    continue
+            
+            if tables_data:
+                # 最も列数が多いテーブルを採用
+                df = max(tables_data, key=lambda d: d.shape[1])
+                print(f"pdfplumber found table with shape: {df.shape}")
+                return df
+                    
+    except ImportError:
+        print("pdfplumber not available")
+    except Exception as e:
+        print(f"pdfplumber fallback failed: {str(e)}")
+    
+    return None
+
 def read_pdf_table(pdf_bytes: bytes) -> pd.DataFrame:
     """PDFの表をTabulaで読み込み、最も列数が多いテーブルを採用。"""
     with tempfile.NamedTemporaryFile(suffix=".pdf") as fp:
         fp.write(pdf_bytes)
         fp.flush()
-        # lattice & stream を両方試す→列数最大のものを採用
+        
+        print(f"PDF file size: {len(pdf_bytes)} bytes")
+        
+        # より多くの抽出方法を試行
         dfs: List[pd.DataFrame] = []
+        
+        # 1. 従来の方法（lattice & stream）
         for mode in ("lattice", "stream"):
             try:
+                print(f"Trying tabula with mode: {mode}")
                 tables = tabula.read_pdf(
                     fp.name, pages="all", multiple_tables=True,
                     lattice=(mode=="lattice"), stream=(mode=="stream")
                 )
                 if tables:
+                    print(f"Found {len(tables)} tables with {mode} mode")
                     dfs.extend(tables)
-            except Exception:
-                pass
+                else:
+                    print(f"No tables found with {mode} mode")
+            except Exception as e:
+                print(f"Error with {mode} mode: {str(e)}")
+        
+        # 2. より寛容な設定で再試行
         if not dfs:
+            print("Trying with more permissive settings...")
+            try:
+                # guess=Falseで境界検出を無効化
+                tables = tabula.read_pdf(
+                    fp.name, pages="all", multiple_tables=True,
+                    guess=False, pandas_options={'header': None}
+                )
+                if tables:
+                    print(f"Found {len(tables)} tables with permissive settings")
+                    dfs.extend(tables)
+            except Exception as e:
+                print(f"Error with permissive settings: {str(e)}")
+        
+        # 3. エリア指定なしで全体を対象
+        if not dfs:
+            print("Trying to read entire page as table...")
+            try:
+                tables = tabula.read_pdf(
+                    fp.name, pages="all", 
+                    lattice=True, stream=False,
+                    multiple_tables=False,
+                    pandas_options={'header': None}
+                )
+                if tables:
+                    print(f"Found {len(tables)} tables reading entire page")
+                    dfs.extend(tables)
+            except Exception as e:
+                print(f"Error reading entire page: {str(e)}")
+        
+        if not dfs:
+            print("No tables detected with tabula, trying pdfplumber fallback...")
+            fallback_df = _try_pdfplumber_fallback(pdf_bytes)
+            if fallback_df is not None:
+                dfs.append(fallback_df)
+        
+        if not dfs:
+            print("No tables detected with any method")
             raise ValueError("表が検出できませんでした。PDFのフォーマットを確認してください。")
 
-        df = max(dfs, key=lambda d: d.shape[1])  # 列数が多い=表らしい
+        # 最も列数が多いテーブルを採用
+        df = max(dfs, key=lambda d: d.shape[1])
+        print(f"Selected table with shape: {df.shape}")
         df = df.reset_index(drop=True)
 
         # 列名の空欄対策：文字列化
         df.columns = [str(c).strip() if str(c).strip() else f"col_{i}" for i, c in enumerate(df.columns)]
+        print(f"Table columns: {list(df.columns)}")
         return df
 
 def normalize_table(df: pd.DataFrame) -> tuple[pd.DataFrame, List[str]]:
