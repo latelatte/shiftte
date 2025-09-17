@@ -1,0 +1,27 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <title>シフト登録RPA - PoC</title>
+</head>
+<body>
+  <h1>シフト登録RPA (PoC)</h1>
+
+  <form action="/api/upload" method="post" enctype="multipart/form-data">
+    <label for="file">シフトPDFをアップロード:</label>
+    <input type="file" id="file" name="file" accept="application/pdf" required>
+    <br><br>
+
+    <label for="name">氏名:</label>
+    <input type="text" id="name" name="name" placeholder="例: 福田有紗" required>
+    <br><br>
+
+    <button type="submit">プレビュー生成</button>
+  </form>
+
+  <br>
+  <a href="/auth/google">
+    <button>Googleに接続</button>
+  </a>
+</body>
+</html>
