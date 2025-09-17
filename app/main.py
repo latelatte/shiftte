@@ -28,8 +28,6 @@ app.mount("/static", StaticFiles(directory="app/static"), name="static")
 
 templates = Jinja2Templates(directory="app/templates")
 
-JOBS: dict[str, dict] = {}
-
 CODES_CSV = os.getenv("CODES_CSV_PATH", "data/codes.default.csv")
 DEFAULT_YEAR = int(os.getenv("DEFAULT_YEAR", "2025"))
 SCOPES = [
@@ -82,6 +80,17 @@ def _build_flow(state: str | None = None) -> Flow:
         state=state,
         redirect_uri=REDIRECT_URI,
     )
+
+def _save_job_to_session(request: Request, job_id: str, job_data: dict) -> None:
+    """jobデータをセッションに保存"""
+    if "jobs" not in request.session:
+        request.session["jobs"] = {}
+    request.session["jobs"][job_id] = job_data
+
+def _get_job_from_session(request: Request, job_id: str) -> dict | None:
+    """セッションからjobデータを取得"""
+    jobs = request.session.get("jobs", {})
+    return jobs.get(job_id)
 
 def _tz_dt(date_str: str, time_str: str, plus_one: bool = False) -> str:
     # date_str: "YYYY-MM-DD", time_str: "HH:MM"
@@ -203,18 +212,19 @@ async def api_upload(
         return JSONResponse({"error": msg}, status_code=400)
 
     job_id = uuid4().hex
-    JOBS[job_id] = {
+    job_data = {
         "uploader_name": name.strip(),
         "events": events,            # [{date,start,end,end_plus1,title,code}]
         "unknown_codes": unknown,    # 未知コード（今回スキップ）
         "created": 0, "updated": 0, "skipped": 0, "deleted": 0,
         "year": year,
     }
+    _save_job_to_session(request, job_id, job_data)
     return RedirectResponse(url=f"/preview?job_id={job_id}", status_code=303)
 
 @app.get("/preview", response_class=HTMLResponse)
 async def preview(request: Request, job_id: str):
-    job = JOBS.get(job_id)
+    job = _get_job_from_session(request, job_id)
     if not job:
         raise HTTPException(status_code=404, detail="job not found")
     authed = bool(request.session.get("credentials"))
@@ -309,7 +319,7 @@ def _get_calendar_service(request: Request):
 
 @app.post("/api/commit")
 async def api_commit(request: Request, job_id: str = Form(...), calendar_id: str = Form("primary")):
-    job = JOBS.get(job_id)
+    job = _get_job_from_session(request, job_id)
     if not job:
         raise HTTPException(status_code=404, detail="job not found")
 
@@ -332,11 +342,12 @@ async def api_commit(request: Request, job_id: str = Form(...), calendar_id: str
         created += 1
 
     job["created"] = created
+    _save_job_to_session(request, job_id, job)
     return RedirectResponse(url=f"/result?job_id={job_id}", status_code=303)
 
 @app.get("/result", response_class=HTMLResponse)
 async def result(request: Request, job_id: str):
-    job = JOBS.get(job_id)
+    job = _get_job_from_session(request, job_id)
     if not job:
         raise HTTPException(status_code=404, detail="job not found")
     return templates.TemplateResponse("result.html", {"request": request, "job": job})
