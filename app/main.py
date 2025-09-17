@@ -113,8 +113,17 @@ async def api_upload(
         events, unknown = to_events(person_row, date_cols, code_map, year=year)
     except Exception as e:
         msg = str(e)
+        # よくあるエラーをユーザーフレンドリーに変換
         if "No columns to parse from file" in msg:
             msg = "変換テーブルCSV（data/codes.default.csv）が空か見つかりません。"
+        elif "表が検出できませんでした" in msg:
+            msg = "PDFから表を読み取れませんでした。ファイル形式や表の構造を確認してください。"
+        elif "日付（M/D）が見つかりません" in msg:
+            msg = "ヘッダー行に日付（例：1/1, 12/31）の形式が見つかりません。PDFの表構造を確認してください。"
+        elif "指定の氏名が見つかりませんでした" in msg:
+            msg = f"氏名「{name.strip()}」がPDFの表内で見つかりませんでした。正確な表記で入力してください。"
+        elif "jpype" in msg.lower():
+            msg = "PDF処理中にエラーが発生しました。システム管理者にお問い合わせください。"
         return JSONResponse({"error": msg}, status_code=400)
 
     job_id = uuid4().hex
