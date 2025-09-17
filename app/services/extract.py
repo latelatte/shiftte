@@ -37,7 +37,7 @@ def read_pdf_table(pdf_bytes: bytes) -> pd.DataFrame:
         df.columns = [str(c).strip() if str(c).strip() else f"col_{i}" for i, c in enumerate(df.columns)]
         return df
 
-def normalize_table(df: pd.DataFrame) -> tuple[pd.DataFrame, List[str]]:
+def normalize_table(df: pd.DataFrame) -> pd.DataFrame:
     """曜日行の除去／名前列の補正／日付列の正規化"""
     # 1) 日付ヘッダを特定（M/D）
     date_cols = [c for c in df.columns if _looks_like_md(c)]
@@ -78,7 +78,7 @@ def normalize_table(df: pd.DataFrame) -> tuple[pd.DataFrame, List[str]]:
     df = df.rename(columns={name_col: "スタッフ名"})
     return df, date_cols
 
-def extract_person_row(df: pd.DataFrame, date_cols: list[str], person: str) -> tuple[pd.DataFrame, List[str]]:
+def extract_person_row(df: pd.DataFrame, date_cols: list[str], person: str) -> pd.DataFrame:
     def norm(s: str) -> str:
         return str(s).replace(" ", "").replace("　", "").strip()
 
