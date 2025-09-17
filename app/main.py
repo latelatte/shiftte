@@ -13,6 +13,8 @@ from app.services.extract import read_pdf_table, normalize_table, extract_person
 from app.services.transform import load_code_map, to_events
 import json
 import base64
+import tempfile
+import pickle
 
 from dotenv import load_dotenv
 load_dotenv()
@@ -23,14 +25,12 @@ if os.getenv("ENVIRONMENT") == "development":
     os.environ['OAUTHLIB_INSECURE_TRANSPORT'] = '1'
 
 app = FastAPI()
-# セッションの設定を最適化
+# セッションの設定をシンプルに
 app.add_middleware(
     SessionMiddleware, 
-    secret_key=os.getenv("SESSION_SECRET", "dev-secret"),
+    secret_key=os.getenv("SESSION_SECRET", "your-secret-key-here"),
     max_age=7200,  # 2時間
-    same_site="lax",
-    https_only=os.getenv("ENVIRONMENT") != "development",
-    session_cookie="session_id"  # カスタムセッションクッキー名
+    same_site="lax"
 )
 
 # 静的ファイル（CSS, JS, 画像等）を配信
@@ -91,35 +91,103 @@ def _build_flow(state: str | None = None) -> Flow:
         redirect_uri=REDIRECT_URI,
     )
 
+# 一時ファイルベースのjob管理
+TEMP_DIR = os.path.join(tempfile.gettempdir(), "shiftte_jobs")
+os.makedirs(TEMP_DIR, exist_ok=True)
+
+def _save_job_to_file(job_id: str, job_data: dict) -> None:
+    """jobデータを一時ファイルに保存"""
+    try:
+        file_path = os.path.join(TEMP_DIR, f"{job_id}.pkl")
+        with open(file_path, 'wb') as f:
+            pickle.dump(job_data, f)
+        print(f"[DEBUG] Saved job {job_id} to file: {file_path}")
+        print(f"[DEBUG] Job has {len(job_data.get('events', []))} events")
+    except Exception as e:
+        print(f"[DEBUG] Error saving job to file: {type(e).__name__}: {str(e)}")
+        raise
+
+def _cleanup_old_jobs():
+    """古いjobファイルをクリーンアップ（2時間以上古いものを削除）"""
+    try:
+        now = datetime.now()
+        for filename in os.listdir(TEMP_DIR):
+            if filename.endswith('.pkl'):
+                file_path = os.path.join(TEMP_DIR, filename)
+                file_time = datetime.fromtimestamp(os.path.getmtime(file_path))
+                if (now - file_time).total_seconds() > 7200:  # 2時間
+                    os.remove(file_path)
+                    print(f"[DEBUG] Cleaned up old job file: {filename}")
+    except Exception as e:
+        print(f"[DEBUG] Error during cleanup: {e}")
+
+def _get_job_from_file(job_id: str) -> dict | None:
+    """一時ファイルからjobデータを取得"""
+    try:
+        file_path = os.path.join(TEMP_DIR, f"{job_id}.pkl")
+        if not os.path.exists(file_path):
+            print(f"[DEBUG] Job file not found: {file_path}")
+            return None
+        
+        with open(file_path, 'rb') as f:
+            job_data = pickle.load(f)
+        print(f"[DEBUG] Loaded job {job_id} from file with {len(job_data.get('events', []))} events")
+        return job_data
+    except Exception as e:
+        print(f"[DEBUG] Error loading job from file: {type(e).__name__}: {str(e)}")
+        return None
+
 def _save_job_to_session(request: Request, job_id: str, job_data: dict) -> None:
-    """jobデータをセッションに保存（軽量化版）"""
-    if "jobs" not in request.session:
-        request.session["jobs"] = {}
-    
-    # セッションサイズを制限するため、重要な情報のみ保存
-    lightweight_job = {
-        "uploader_name": job_data["uploader_name"],
-        "events": job_data["events"][:50],  # 最大50件まで（セッションサイズ制限対策）
-        "year": job_data["year"],
-        "created": job_data.get("created", 0),
-        "updated": job_data.get("updated", 0),
-        "skipped": job_data.get("skipped", 0),
-        "deleted": job_data.get("deleted", 0),
-    }
-    request.session["jobs"][job_id] = lightweight_job
-    print(f"[DEBUG] Saved lightweight job {job_id} to session. Total jobs: {len(request.session['jobs'])}")
-    print(f"[DEBUG] Job has {len(lightweight_job['events'])} events (truncated if >50)")
+    """jobデータをセッションとファイルに保存（ハイブリッド）"""
+    try:
+        # まずファイルに保存（確実性を優先）
+        _save_job_to_file(job_id, job_data)
+        
+        # セッションにも保存を試行（軽量化版）
+        if "jobs" not in request.session:
+            request.session["jobs"] = {}
+            print(f"[DEBUG] Created new jobs dictionary in session")
+        
+        # セッションサイズを制限するため、重要な情報のみ保存
+        lightweight_job = {
+            "uploader_name": job_data["uploader_name"],
+            "events": job_data["events"][:10],  # さらに制限（10件まで）
+            "year": job_data["year"],
+            "created": job_data.get("created", 0),
+        }
+        
+        print(f"[DEBUG] About to save job {job_id} with {len(lightweight_job['events'])} events to session")
+        request.session["jobs"][job_id] = lightweight_job
+        
+        # セッションを強制的に更新（辞書を再代入）
+        temp_jobs = request.session["jobs"].copy()
+        request.session["jobs"] = temp_jobs
+        
+        print(f"[DEBUG] Saved job {job_id} to both file and session")
+        
+    except Exception as e:
+        print(f"[DEBUG] Exception in _save_job_to_session: {type(e).__name__}: {str(e)}")
+        # ファイル保存は成功している可能性があるので、セッション失敗は無視
+        print(f"[DEBUG] Continuing with file-based storage only")
 
 def _get_job_from_session(request: Request, job_id: str) -> dict | None:
-    """セッションからjobデータを取得"""
+    """セッションまたはファイルからjobデータを取得（ハイブリッド）"""
+    # まずファイルから取得を試行（より信頼性が高い）
+    job = _get_job_from_file(job_id)
+    if job:
+        print(f"[DEBUG] Found job {job_id} in file with {len(job.get('events', []))} events")
+        return job
+    
+    # ファイルで見つからない場合、セッションから取得
     jobs = request.session.get("jobs", {})
     print(f"[DEBUG] Looking for job {job_id}. Available jobs in session: {list(jobs.keys())}")
-    job = jobs.get(job_id)
-    if job:
-        print(f"[DEBUG] Found job {job_id} with {len(job.get('events', []))} events")
+    session_job = jobs.get(job_id)
+    if session_job:
+        print(f"[DEBUG] Found job {job_id} in session with {len(session_job.get('events', []))} events")
+        return session_job
     else:
-        print(f"[DEBUG] Job {job_id} not found in session")
-    return job
+        print(f"[DEBUG] Job {job_id} not found in either file or session")
+        return None
 
 def _encode_job_data(job_data: dict) -> str:
     """jobデータをbase64エンコードして文字列にする"""
@@ -227,6 +295,11 @@ async def api_upload(
     name: str = Form(...),
     year: int = Form(DEFAULT_YEAR),
 ):
+    print(f"[DEBUG] Upload started for user: {name.strip()}")
+    
+    # 古いjobファイルをクリーンアップ
+    _cleanup_old_jobs()
+    
     pdf_bytes = await file.read()
     try:
         print(f"Processing PDF for user: {name.strip()}")
@@ -255,22 +328,31 @@ async def api_upload(
             msg = "変換テーブルCSV（data/codes.default.csv）が空か見つかりません。"
         return JSONResponse({"error": msg}, status_code=400)
 
-    job_id = uuid4().hex
-    job_data = {
-        "uploader_name": name.strip(),
-        "events": events,            # [{date,start,end,end_plus1,title,code}]
-        "unknown_codes": unknown,    # 未知コード（今回スキップ）
-        "created": 0, "updated": 0, "skipped": 0, "deleted": 0,
-        "year": year,
-    }
-    print(f"[DEBUG] Generated job_id: {job_id}")
-    print(f"[DEBUG] Job data has {len(events)} events")
-    
-    # セッションに保存
-    _save_job_to_session(request, job_id, job_data)
-    
-    print(f"[DEBUG] Redirecting to /preview?job_id={job_id}")
-    return RedirectResponse(url=f"/preview?job_id={job_id}", status_code=303)
+    try:
+        job_id = uuid4().hex
+        job_data = {
+            "uploader_name": name.strip(),
+            "events": events,            # [{date,start,end,end_plus1,title,code}]
+            "unknown_codes": unknown,    # 未知コード（今回スキップ）
+            "created": 0, "updated": 0, "skipped": 0, "deleted": 0,
+            "year": year,
+        }
+        print(f"[DEBUG] Generated job_id: {job_id}")
+        print(f"[DEBUG] Job data has {len(events)} events")
+        print(f"[DEBUG] Session before save: {list(request.session.keys())}")
+        
+        # セッションに保存
+        _save_job_to_session(request, job_id, job_data)
+        
+        print(f"[DEBUG] Session after save: {list(request.session.keys())}")
+        print(f"[DEBUG] Redirecting to /preview?job_id={job_id}")
+        return RedirectResponse(url=f"/preview?job_id={job_id}", status_code=303)
+        
+    except Exception as e:
+        print(f"[DEBUG] Error saving job to session: {type(e).__name__}: {str(e)}")
+        import traceback
+        traceback.print_exc()
+        return JSONResponse({"error": f"セッション保存エラー: {str(e)}"}, status_code=500)
 
 @app.get("/preview", response_class=HTMLResponse)
 async def preview(request: Request, job_id: str):
@@ -397,8 +479,8 @@ async def api_commit(request: Request, job_id: str = Form(...), calendar_id: str
         created += 1
 
     job["created"] = created
-    # セッションのjobデータも更新
-    _save_job_to_session(request, job_id, job)
+    # ファイルにjobデータを保存し直す
+    _save_job_to_file(job_id, job)
     return RedirectResponse(url=f"/result?job_id={job_id}", status_code=303)
 
 @app.get("/result", response_class=HTMLResponse)
