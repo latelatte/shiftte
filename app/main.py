@@ -11,6 +11,8 @@ from google.oauth2.credentials import Credentials
 from google_auth_oauthlib.flow import Flow
 from app.services.extract import read_pdf_table, normalize_table, extract_person_row
 from app.services.transform import load_code_map, to_events
+import json
+import base64
 
 from dotenv import load_dotenv
 load_dotenv()
@@ -21,7 +23,15 @@ if os.getenv("ENVIRONMENT") == "development":
     os.environ['OAUTHLIB_INSECURE_TRANSPORT'] = '1'
 
 app = FastAPI()
-app.add_middleware(SessionMiddleware, secret_key=os.getenv("SESSION_SECRET", "dev-secret"))
+# セッションの設定を最適化
+app.add_middleware(
+    SessionMiddleware, 
+    secret_key=os.getenv("SESSION_SECRET", "dev-secret"),
+    max_age=7200,  # 2時間
+    same_site="lax",
+    https_only=os.getenv("ENVIRONMENT") != "development",
+    session_cookie="session_id"  # カスタムセッションクッキー名
+)
 
 # 静的ファイル（CSS, JS, 画像等）を配信
 app.mount("/static", StaticFiles(directory="app/static"), name="static")
@@ -82,15 +92,49 @@ def _build_flow(state: str | None = None) -> Flow:
     )
 
 def _save_job_to_session(request: Request, job_id: str, job_data: dict) -> None:
-    """jobデータをセッションに保存"""
+    """jobデータをセッションに保存（軽量化版）"""
     if "jobs" not in request.session:
         request.session["jobs"] = {}
-    request.session["jobs"][job_id] = job_data
+    
+    # セッションサイズを制限するため、重要な情報のみ保存
+    lightweight_job = {
+        "uploader_name": job_data["uploader_name"],
+        "events": job_data["events"][:50],  # 最大50件まで（セッションサイズ制限対策）
+        "year": job_data["year"],
+        "created": job_data.get("created", 0),
+        "updated": job_data.get("updated", 0),
+        "skipped": job_data.get("skipped", 0),
+        "deleted": job_data.get("deleted", 0),
+    }
+    request.session["jobs"][job_id] = lightweight_job
+    print(f"[DEBUG] Saved lightweight job {job_id} to session. Total jobs: {len(request.session['jobs'])}")
+    print(f"[DEBUG] Job has {len(lightweight_job['events'])} events (truncated if >50)")
 
 def _get_job_from_session(request: Request, job_id: str) -> dict | None:
     """セッションからjobデータを取得"""
     jobs = request.session.get("jobs", {})
-    return jobs.get(job_id)
+    print(f"[DEBUG] Looking for job {job_id}. Available jobs in session: {list(jobs.keys())}")
+    job = jobs.get(job_id)
+    if job:
+        print(f"[DEBUG] Found job {job_id} with {len(job.get('events', []))} events")
+    else:
+        print(f"[DEBUG] Job {job_id} not found in session")
+    return job
+
+def _encode_job_data(job_data: dict) -> str:
+    """jobデータをbase64エンコードして文字列にする"""
+    json_str = json.dumps(job_data, ensure_ascii=False)
+    encoded = base64.b64encode(json_str.encode('utf-8')).decode('ascii')
+    return encoded
+
+def _decode_job_data(encoded_data: str) -> dict | None:
+    """base64エンコードされた文字列からjobデータを復元する"""
+    try:
+        json_str = base64.b64decode(encoded_data.encode('ascii')).decode('utf-8')
+        return json.loads(json_str)
+    except Exception as e:
+        print(f"[DEBUG] Failed to decode job data: {e}")
+        return None
 
 def _tz_dt(date_str: str, time_str: str, plus_one: bool = False) -> str:
     # date_str: "YYYY-MM-DD", time_str: "HH:MM"
@@ -219,13 +263,24 @@ async def api_upload(
         "created": 0, "updated": 0, "skipped": 0, "deleted": 0,
         "year": year,
     }
+    print(f"[DEBUG] Generated job_id: {job_id}")
+    print(f"[DEBUG] Job data has {len(events)} events")
+    
+    # セッションに保存
     _save_job_to_session(request, job_id, job_data)
+    
+    print(f"[DEBUG] Redirecting to /preview?job_id={job_id}")
     return RedirectResponse(url=f"/preview?job_id={job_id}", status_code=303)
 
 @app.get("/preview", response_class=HTMLResponse)
 async def preview(request: Request, job_id: str):
+    print(f"[DEBUG] Preview endpoint called with job_id: {job_id}")
+    print(f"[DEBUG] Session data keys: {list(request.session.keys())}")
+    
     job = _get_job_from_session(request, job_id)
+    
     if not job:
+        print(f"[DEBUG] Job {job_id} not found, raising 404")
         raise HTTPException(status_code=404, detail="job not found")
     authed = bool(request.session.get("credentials"))
     
@@ -342,6 +397,7 @@ async def api_commit(request: Request, job_id: str = Form(...), calendar_id: str
         created += 1
 
     job["created"] = created
+    # セッションのjobデータも更新
     _save_job_to_session(request, job_id, job)
     return RedirectResponse(url=f"/result?job_id={job_id}", status_code=303)
 
