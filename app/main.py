@@ -106,12 +106,27 @@ async def api_upload(
 ):
     pdf_bytes = await file.read()
     try:
+        print(f"Processing PDF for user: {name.strip()}")
         df = read_pdf_table(pdf_bytes)
+        print(f"PDF table read successfully, shape: {df.shape}")
+        
         df, date_cols = normalize_table(df)
+        print(f"Table normalized, date columns: {date_cols}")
+        
         person_row, date_cols = extract_person_row(df, date_cols, name.strip())
+        print(f"Person row extracted for: {name.strip()}")
+        
         code_map = load_code_map(CODES_CSV)
+        print(f"Code map loaded with {len(code_map)} entries")
+        
         events, unknown = to_events(person_row, date_cols, code_map, year=year)
+        print(f"Events generated: {len(events)} events, {len(unknown)} unknown codes")
+        
     except Exception as e:
+        print(f"Error in API upload: {type(e).__name__}: {str(e)}")
+        import traceback
+        traceback.print_exc()
+        
         msg = str(e)
         if "No columns to parse from file" in msg:
             msg = "変換テーブルCSV（data/codes.default.csv）が空か見つかりません。"
