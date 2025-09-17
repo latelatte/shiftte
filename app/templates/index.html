@@ -1,7 +1,7 @@
 <!DOCTYPE html>
 <html lang="ja">
 <head>
-  <meta charset="UTF-8">
+  <meta charset="UTF-8" />
   <title>シフト登録RPA - PoC</title>
 </head>
 <body>
@@ -9,19 +9,23 @@
 
   <form action="/api/upload" method="post" enctype="multipart/form-data">
     <label for="file">シフトPDFをアップロード:</label>
-    <input type="file" id="file" name="file" accept="application/pdf" required>
-    <br><br>
+    <input type="file" id="file" name="file" accept="application/pdf" required />
+    <br /><br />
 
     <label for="name">氏名:</label>
-    <input type="text" id="name" name="name" placeholder="例: 福田有紗" required>
-    <br><br>
+    <input type="text" id="name" name="name" placeholder="例: 福田有紗" required />
+    <br /><br />
 
     <button type="submit">プレビュー生成</button>
   </form>
 
-  <br>
-  <a href="/auth/google">
-    <button>Googleに接続</button>
-  </a>
+  <br />
+  {% if authed %}
+    <p style="color: green;">✅ Googleカレンダーに接続済み</p>
+    <a href="/auth/logout"><button style="background: #dc3545; color: white; padding: 8px 16px; border: none; border-radius: 4px; cursor: pointer;">接続解除</button></a>
+  {% else %}
+    <p style="color: orange;">⚠️ Googleカレンダーに未接続</p>
+    <a href="/auth/google"><button style="background: #4285f4; color: white; padding: 8px 16px; border: none; border-radius: 4px; cursor: pointer;">Googleカレンダーに接続</button></a>
+  {% endif %}
 </body>
 </html>

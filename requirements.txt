@@ -1,3 +1,11 @@
 fastapi
 uvicorn
 jinja2
+python-multipart
+pandas
+tabula-py
+python-dateutil
+google-api-python-client
+google-auth
+google-auth-oauthlib
+itsdangerous
