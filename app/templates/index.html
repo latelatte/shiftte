@@ -2,30 +2,54 @@
 <html lang="ja">
 <head>
   <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>シフト登録RPA - PoC</title>
+  <link rel="stylesheet" href="/static/style.css" />
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
 </head>
 <body>
-  <h1>シフト登録RPA (PoC)</h1>
+  <div class="container">
+    <h1>シフト登録RPA</h1>
+    
+    <div class="card">
+      <form action="/api/upload" method="post" enctype="multipart/form-data">
+        <div class="form-group">
+          <label for="file">シフトPDFをアップロード</label>
+          <input type="file" id="file" name="file" accept="application/pdf" required />
+        </div>
 
-  <form action="/api/upload" method="post" enctype="multipart/form-data">
-    <label for="file">シフトPDFをアップロード:</label>
-    <input type="file" id="file" name="file" accept="application/pdf" required />
-    <br /><br />
+        <div class="form-group">
+          <label for="name">氏名</label>
+          <input type="text" id="name" name="name" placeholder="例: 山田太郎" required />
+        </div>
 
-    <label for="name">氏名:</label>
-    <input type="text" id="name" name="name" placeholder="例: 福田有紗" required />
-    <br /><br />
+        <button type="submit" class="btn btn-primary">
+          📊 プレビュー生成
+        </button>
+      </form>
+    </div>
 
-    <button type="submit">プレビュー生成</button>
-  </form>
-
-  <br />
-  {% if authed %}
-    <p style="color: green;">✅ Googleカレンダーに接続済み</p>
-    <a href="/auth/logout"><button style="background: #dc3545; color: white; padding: 8px 16px; border: none; border-radius: 4px; cursor: pointer;">接続解除</button></a>
-  {% else %}
-    <p style="color: orange;">⚠️ Googleカレンダーに未接続</p>
-    <a href="/auth/google"><button style="background: #4285f4; color: white; padding: 8px 16px; border: none; border-radius: 4px; cursor: pointer;">Googleカレンダーに接続</button></a>
-  {% endif %}
+    <div class="card">
+      {% if authed %}
+        <div class="status status-connected">
+          <span>✅</span>
+          <span>Googleカレンダーに接続済み</span>
+        </div>
+        <a href="/auth/logout" class="btn btn-danger">
+          🔓 接続解除
+        </a>
+      {% else %}
+        <div class="status status-disconnected">
+          <span>⚠️</span>
+          <span>Googleカレンダーに未接続</span>
+        </div>
+        <a href="/auth/google" class="btn btn-google">
+          🔗 Googleカレンダーに接続
+        </a>
+      {% endif %}
+    </div>
+  </div>
 </body>
 </html>

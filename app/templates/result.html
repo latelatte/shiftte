@@ -2,18 +2,34 @@
 <html lang="ja">
 <head>
   <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>結果 - シフト登録RPA</title>
+  <link rel="stylesheet" href="/static/style.css" />
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
 </head>
 <body>
-  <h1>登録結果（ダミー）</h1>
+  <div class="container">
+    <h1>登録完了</h1>
+    
+    <div class="card">
+      <div class="status status-connected">
+        <span>✅</span>
+        <span>シフト登録が正常に完了しました</span>
+      </div>
 
-  <ul>
-    <li>作成: {{ job.created }}</li>
-    <li>更新: {{ job.updated }}</li>
-    <li>スキップ: {{ job.skipped }}</li>
-    <li>削除: {{ job.deleted }}</li>
-  </ul>
+      <ul class="results-list">
+        <li>📝 作成: {{ job.created }} 件</li>
+        <li>🔄 更新: {{ job.updated }} 件</li>
+        <li>⏭️ スキップ: {{ job.skipped }} 件</li>
+        <li>🗑️ 削除: {{ job.deleted }} 件</li>
+      </ul>
+    </div>
 
-  <p><a href="/">トップへ戻る</a></p>
+    <div class="card">
+      <a href="/" class="nav-link">← トップへ戻る</a>
+    </div>
+  </div>
 </body>
 </html>

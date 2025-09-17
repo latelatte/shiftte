@@ -2,58 +2,97 @@
 <html lang="ja">
 <head>
   <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>プレビュー - シフト登録RPA</title>
+  <link rel="stylesheet" href="/static/style.css" />
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
 </head>
 <body>
-  <h1>プレビュー</h1>
-  <p>対象: {{ job.uploader_name }}</p>
-
-  {% if events and events|length > 0 %}
-  <table border="1" cellspacing="0" cellpadding="6">
-    <thead>
-      <tr>
-        <th>#</th><th>日付</th><th>開始</th><th>終了</th><th>翌日跨ぎ</th><th>件名(コード)</th>
-      </tr>
-    </thead>
-    <tbody>
-      {% for e in events %}
-      <tr>
-        <td>{{ loop.index }}</td>
-        <td>{{ e.date }}</td>
-        <td>{{ e.start }}</td>
-        <td>{{ e.end }}</td>
-        <td>{{ 'Yes' if e.get('end_plus1') else '' }}</td>
-        <td>{{ e.title }}</td>
-      </tr>
-      {% endfor %}
-    </tbody>
-  </table>
-
-  <form action="/api/commit" method="post" style="margin-top:16px;">
-    <input type="hidden" name="job_id" value="{{ job_id }}" />
+  <div class="container">
+    <h1>プレビュー</h1>
     
-    {% if authed and calendars %}
-      <label for="calendar_id">登録先カレンダー:</label>
-      <select name="calendar_id" id="calendar_id" required style="margin-left: 8px; margin-right: 16px; padding: 4px;">
-        {% for cal in calendars %}
-          <option value="{{ cal.id }}" {% if cal.primary %}selected{% endif %}>
-            {% if cal.primary %}🌟 {% endif %}{{ cal.summary }}{% if cal.primary %} (メインカレンダー){% endif %}
-          </option>
-        {% endfor %}
-      </select>
-      <button type="submit">選択したカレンダーに登録</button>
-    {% elif authed %}
-      <p style="color: orange;">カレンダーリストを取得できませんでした。</p>
-      <button type="submit">デフォルトカレンダーに登録</button>
-    {% else %}
-      <p style="color: red;">Googleカレンダーに登録するには、先に認証を完了してください。</p>
-      <a href="/auth/google" style="background: #4285f4; color: white; padding: 8px 16px; text-decoration: none; border-radius: 4px;">Google認証</a>
-    {% endif %}
-  </form>
-  {% else %}
-    <p>イベントがありません</p>
-  {% endif %}
+    <div class="card">
+      <div class="status status-connected">
+        <span>👤</span>
+        <span>対象: {{ job.uploader_name }}</span>
+      </div>
 
-  <p style="margin-top:16px;"><a href="/">← 戻る</a></p>
+      {% if events and events|length > 0 %}
+        <div class="table-container">
+          <table>
+            <thead>
+              <tr>
+                <th>#</th>
+                <th>日付</th>
+                <th>開始</th>
+                <th>終了</th>
+                <th>翌日跨ぎ</th>
+                <th>件名(コード)</th>
+              </tr>
+            </thead>
+            <tbody>
+              {% for e in events %}
+              <tr>
+                <td>{{ loop.index }}</td>
+                <td>{{ e.date }}</td>
+                <td>{{ e.start }}</td>
+                <td>{{ e.end }}</td>
+                <td>{{ '✅' if e.get('end_plus1') else '' }}</td>
+                <td>{{ e.title }}</td>
+              </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+
+        <form action="/api/commit" method="post">
+          <input type="hidden" name="job_id" value="{{ job_id }}" />
+          
+          {% if authed and calendars %}
+            <div class="calendar-selection">
+              <label for="calendar_id">登録先カレンダー:</label>
+              <select name="calendar_id" id="calendar_id" required>
+                {% for cal in calendars %}
+                  <option value="{{ cal.id }}" {% if cal.primary %}selected{% endif %}>
+                    {% if cal.primary %}🌟 {% endif %}{{ cal.summary }}{% if cal.primary %} (メインカレンダー){% endif %}
+                  </option>
+                {% endfor %}
+              </select>
+              <button type="submit" class="btn btn-success">
+                📅 選択したカレンダーに登録
+              </button>
+            </div>
+          {% elif authed %}
+            <div class="status status-disconnected">
+              <span>⚠️</span>
+              <span>カレンダーリストを取得できませんでした。</span>
+            </div>
+            <button type="submit" class="btn btn-primary">
+              📅 デフォルトカレンダーに登録
+            </button>
+          {% else %}
+            <div class="status status-error">
+              <span>❌</span>
+              <span>Googleカレンダーに登録するには、先に認証を完了してください。</span>
+            </div>
+            <a href="/auth/google" class="btn btn-google">
+              🔗 Google認証
+            </a>
+          {% endif %}
+        </form>
+      {% else %}
+        <div class="status status-disconnected">
+          <span>📋</span>
+          <span>イベントがありません</span>
+        </div>
+      {% endif %}
+    </div>
+
+    <div class="card">
+      <a href="/" class="nav-link">← トップへ戻る</a>
+    </div>
+  </div>
 </body>
 </html>
