@@ -1,7 +1,11 @@
 from __future__ import annotations
 from typing import Dict, List, Tuple
 import pandas as pd
+import re
 from datetime import datetime, timedelta
+
+# 日付から曜日部分を除去するための正規表現
+MD_EXTRACT_RE = re.compile(r"^\s*(\d{1,2}/\d{1,2})")
 
 def load_code_map(csv_path: str) -> Dict[str, Tuple[str, str]]:
     df = pd.read_csv(csv_path)
@@ -13,6 +17,13 @@ def load_code_map(csv_path: str) -> Dict[str, Tuple[str, str]]:
         m[code] = (start, end)
     return m
 
+def _extract_md(md_str: str) -> str:
+    """日付文字列から M/D 部分のみを抽出（曜日があれば除去）"""
+    match = MD_EXTRACT_RE.match(str(md_str).strip())
+    if match:
+        return match.group(1)
+    return md_str  # マッチしない場合はそのまま返す
+
 def to_events(target_row: pd.DataFrame, date_cols: list[str], code_map: Dict[str, Tuple[str, str]], year: int) -> tuple[List[dict], List[str]]:
     # 横持ち → 縦持ち
     id_vars = [c for c in target_row.columns if c not in date_cols]
@@ -23,7 +34,8 @@ def to_events(target_row: pd.DataFrame, date_cols: list[str], code_map: Dict[str
     events: List[dict] = []
 
     def parse_dt(md: str, hm: str) -> datetime:
-        base = datetime.strptime(f"{year}/{md}", "%Y/%m/%d")
+        md_clean = _extract_md(md)  # 曜日部分を除去
+        base = datetime.strptime(f"{year}/{md_clean}", "%Y/%m/%d")
         if hm.endswith("+1"):
             t = datetime.strptime(hm[:-2], "%H:%M").time()
             return datetime.combine(base + timedelta(days=1), t)
