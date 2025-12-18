@@ -5,10 +5,15 @@ import re
 import tabula
 import pandas as pd
 
+# 日付のみ: 12/30
 MD_RE = re.compile(r"^\s*(\d{1,2})/(\d{1,2})\s*$")
+# 日付+曜日: 12/30(火) or 12/30（火） or 12/30 (火) など
+MD_WEEKDAY_RE = re.compile(r"^\s*(\d{1,2})/(\d{1,2})\s*[（(]\s*[月火水木金土日]\s*[）)]\s*$")
 
 def _looks_like_md(s: str) -> bool:
-    return bool(MD_RE.match(str(s)))
+    """日付形式かどうかを判定（日付のみ、または日付+曜日の両方に対応）"""
+    s_str = str(s)
+    return bool(MD_RE.match(s_str) or MD_WEEKDAY_RE.match(s_str))
 
 def _try_pdfplumber_fallback(pdf_bytes: bytes) -> Optional[pd.DataFrame]:
     """pdfplumberを使ったフォールバック処理"""
