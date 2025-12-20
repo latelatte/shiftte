@@ -33,9 +33,29 @@ def to_events(target_row: pd.DataFrame, date_cols: list[str], code_map: Dict[str
     unknown: set[str] = set()
     events: List[dict] = []
 
+    # 年をまたぐ処理のため、シフト表に含まれる月を収集
+    months_in_table: set[int] = set()
+    for col in date_cols:
+        md_clean = _extract_md(col)
+        try:
+            month = int(md_clean.split("/")[0])
+            months_in_table.add(month)
+        except (ValueError, IndexError):
+            pass
+    
+    # 12月と1月が両方含まれている場合、年をまたぐと判断
+    crosses_year = (12 in months_in_table and 1 in months_in_table)
+
     def parse_dt(md: str, hm: str) -> datetime:
         md_clean = _extract_md(md)  # 曜日部分を除去
-        base = datetime.strptime(f"{year}/{md_clean}", "%Y/%m/%d")
+        month = int(md_clean.split("/")[0])
+        
+        # 年をまたぐ場合、1月〜の日付は翌年とする
+        actual_year = year
+        if crosses_year and month <= 6:  # 1月〜6月は翌年と判断（安全マージン）
+            actual_year = year + 1
+        
+        base = datetime.strptime(f"{actual_year}/{md_clean}", "%Y/%m/%d")
         if hm.endswith("+1"):
             t = datetime.strptime(hm[:-2], "%H:%M").time()
             return datetime.combine(base + timedelta(days=1), t)
