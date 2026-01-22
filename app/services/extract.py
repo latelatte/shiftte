@@ -2,8 +2,13 @@ from __future__ import annotations
 import tempfile
 from typing import List, Optional
 import re
-import tabula
+import gc
+import os
 import pandas as pd
+
+# tabula, pdfplumberは遅延インポート（メモリ節約）
+# JVMヒープサイズを制限（Herokuメモリ制限対応）
+os.environ.setdefault('JAVA_TOOL_OPTIONS', '-Xmx256m -Xms64m')
 
 # 日付のみ: 12/30
 MD_RE = re.compile(r"^\s*(\d{1,2})/(\d{1,2})\s*$")
@@ -62,11 +67,17 @@ def _try_pdfplumber_fallback(pdf_bytes: bytes) -> Optional[pd.DataFrame]:
         print("pdfplumber not available")
     except Exception as e:
         print(f"pdfplumber fallback failed: {str(e)}")
+    finally:
+        # メモリ解放
+        gc.collect()
     
     return None
 
 def read_pdf_table(pdf_bytes: bytes) -> pd.DataFrame:
     """PDFの表をTabulaで読み込み、最も列数が多いテーブルを採用。"""
+    # tabulaを遅延インポート（JVMの起動を遅らせる）
+    import tabula
+    
     with tempfile.NamedTemporaryFile(suffix=".pdf") as fp:
         fp.write(pdf_bytes)
         fp.flush()
@@ -141,6 +152,10 @@ def read_pdf_table(pdf_bytes: bytes) -> pd.DataFrame:
         # 列名の空欄対策：文字列化
         df.columns = [str(c).strip() if str(c).strip() else f"col_{i}" for i, c in enumerate(df.columns)]
         print(f"Table columns: {list(df.columns)}")
+        
+        # メモリ解放（JVMヒープを含む）
+        gc.collect()
+        
         return df
 
 def normalize_table(df: pd.DataFrame) -> tuple[pd.DataFrame, List[str]]:
