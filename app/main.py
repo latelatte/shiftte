@@ -39,7 +39,8 @@ app.mount("/static", StaticFiles(directory="app/static"), name="static")
 templates = Jinja2Templates(directory="app/templates")
 
 CODES_CSV = os.getenv("CODES_CSV_PATH", "data/codes.default.csv")
-DEFAULT_YEAR = int(os.getenv("DEFAULT_YEAR", "2025"))
+# DEFAULT_YEARを現在の年に自動設定（環境変数で上書き可能）
+DEFAULT_YEAR = int(os.getenv("DEFAULT_YEAR", str(datetime.now().year)))
 SCOPES = [
     "https://www.googleapis.com/auth/calendar.events",
     "https://www.googleapis.com/auth/calendar.readonly"
