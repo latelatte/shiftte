@@ -11,6 +11,10 @@ from google.oauth2.credentials import Credentials
 from google_auth_oauthlib.flow import Flow
 from app.services.extract import read_pdf_table, normalize_table, extract_person_row
 from app.services.transform import load_code_map, to_events
+import json
+import base64
+import tempfile
+import pickle
 
 from dotenv import load_dotenv
 load_dotenv()
@@ -21,17 +25,22 @@ if os.getenv("ENVIRONMENT") == "development":
     os.environ['OAUTHLIB_INSECURE_TRANSPORT'] = '1'
 
 app = FastAPI()
-app.add_middleware(SessionMiddleware, secret_key=os.getenv("SESSION_SECRET", "dev-secret"))
+# セッションの設定をシンプルに
+app.add_middleware(
+    SessionMiddleware, 
+    secret_key=os.getenv("SESSION_SECRET", "your-secret-key-here"),
+    max_age=7200,  # 2時間
+    same_site="lax"
+)
 
 # 静的ファイル（CSS, JS, 画像等）を配信
 app.mount("/static", StaticFiles(directory="app/static"), name="static")
 
 templates = Jinja2Templates(directory="app/templates")
 
-JOBS: dict[str, dict] = {}
-
 CODES_CSV = os.getenv("CODES_CSV_PATH", "data/codes.default.csv")
-DEFAULT_YEAR = int(os.getenv("DEFAULT_YEAR", "2025"))
+# DEFAULT_YEARを現在の年に自動設定（環境変数で上書き可能）
+DEFAULT_YEAR = int(os.getenv("DEFAULT_YEAR", str(datetime.now().year)))
 SCOPES = [
     "https://www.googleapis.com/auth/calendar.events",
     "https://www.googleapis.com/auth/calendar.readonly"
@@ -83,6 +92,119 @@ def _build_flow(state: str | None = None) -> Flow:
         redirect_uri=REDIRECT_URI,
     )
 
+# 一時ファイルベースのjob管理
+TEMP_DIR = os.path.join(tempfile.gettempdir(), "shiftte_jobs")
+os.makedirs(TEMP_DIR, exist_ok=True)
+
+def _save_job_to_file(job_id: str, job_data: dict) -> None:
+    """jobデータを一時ファイルに保存"""
+    try:
+        file_path = os.path.join(TEMP_DIR, f"{job_id}.pkl")
+        with open(file_path, 'wb') as f:
+            pickle.dump(job_data, f)
+        print(f"[DEBUG] Saved job {job_id} to file: {file_path}")
+        print(f"[DEBUG] Job has {len(job_data.get('events', []))} events")
+    except Exception as e:
+        print(f"[DEBUG] Error saving job to file: {type(e).__name__}: {str(e)}")
+        raise
+
+def _cleanup_old_jobs():
+    """古いjobファイルをクリーンアップ（2時間以上古いものを削除）"""
+    try:
+        now = datetime.now()
+        for filename in os.listdir(TEMP_DIR):
+            if filename.endswith('.pkl'):
+                file_path = os.path.join(TEMP_DIR, filename)
+                file_time = datetime.fromtimestamp(os.path.getmtime(file_path))
+                if (now - file_time).total_seconds() > 7200:  # 2時間
+                    os.remove(file_path)
+                    print(f"[DEBUG] Cleaned up old job file: {filename}")
+    except Exception as e:
+        print(f"[DEBUG] Error during cleanup: {e}")
+
+def _get_job_from_file(job_id: str) -> dict | None:
+    """一時ファイルからjobデータを取得"""
+    try:
+        file_path = os.path.join(TEMP_DIR, f"{job_id}.pkl")
+        if not os.path.exists(file_path):
+            print(f"[DEBUG] Job file not found: {file_path}")
+            return None
+        
+        with open(file_path, 'rb') as f:
+            job_data = pickle.load(f)
+        print(f"[DEBUG] Loaded job {job_id} from file with {len(job_data.get('events', []))} events")
+        return job_data
+    except Exception as e:
+        print(f"[DEBUG] Error loading job from file: {type(e).__name__}: {str(e)}")
+        return None
+
+def _save_job_to_session(request: Request, job_id: str, job_data: dict) -> None:
+    """jobデータをセッションとファイルに保存（ハイブリッド）"""
+    try:
+        # まずファイルに保存（確実性を優先）
+        _save_job_to_file(job_id, job_data)
+        
+        # セッションにも保存を試行（軽量化版）
+        if "jobs" not in request.session:
+            request.session["jobs"] = {}
+            print(f"[DEBUG] Created new jobs dictionary in session")
+        
+        # セッションサイズを制限するため、重要な情報のみ保存
+        lightweight_job = {
+            "uploader_name": job_data["uploader_name"],
+            "events": job_data["events"][:10],  # さらに制限（10件まで）
+            "year": job_data["year"],
+            "created": job_data.get("created", 0),
+        }
+        
+        print(f"[DEBUG] About to save job {job_id} with {len(lightweight_job['events'])} events to session")
+        request.session["jobs"][job_id] = lightweight_job
+        
+        # セッションを強制的に更新（辞書を再代入）
+        temp_jobs = request.session["jobs"].copy()
+        request.session["jobs"] = temp_jobs
+        
+        print(f"[DEBUG] Saved job {job_id} to both file and session")
+        
+    except Exception as e:
+        print(f"[DEBUG] Exception in _save_job_to_session: {type(e).__name__}: {str(e)}")
+        # ファイル保存は成功している可能性があるので、セッション失敗は無視
+        print(f"[DEBUG] Continuing with file-based storage only")
+
+def _get_job_from_session(request: Request, job_id: str) -> dict | None:
+    """セッションまたはファイルからjobデータを取得（ハイブリッド）"""
+    # まずファイルから取得を試行（より信頼性が高い）
+    job = _get_job_from_file(job_id)
+    if job:
+        print(f"[DEBUG] Found job {job_id} in file with {len(job.get('events', []))} events")
+        return job
+    
+    # ファイルで見つからない場合、セッションから取得
+    jobs = request.session.get("jobs", {})
+    print(f"[DEBUG] Looking for job {job_id}. Available jobs in session: {list(jobs.keys())}")
+    session_job = jobs.get(job_id)
+    if session_job:
+        print(f"[DEBUG] Found job {job_id} in session with {len(session_job.get('events', []))} events")
+        return session_job
+    else:
+        print(f"[DEBUG] Job {job_id} not found in either file or session")
+        return None
+
+def _encode_job_data(job_data: dict) -> str:
+    """jobデータをbase64エンコードして文字列にする"""
+    json_str = json.dumps(job_data, ensure_ascii=False)
+    encoded = base64.b64encode(json_str.encode('utf-8')).decode('ascii')
+    return encoded
+
+def _decode_job_data(encoded_data: str) -> dict | None:
+    """base64エンコードされた文字列からjobデータを復元する"""
+    try:
+        json_str = base64.b64decode(encoded_data.encode('ascii')).decode('utf-8')
+        return json.loads(json_str)
+    except Exception as e:
+        print(f"[DEBUG] Failed to decode job data: {e}")
+        return None
+
 def _tz_dt(date_str: str, time_str: str, plus_one: bool = False) -> str:
     # date_str: "YYYY-MM-DD", time_str: "HH:MM"
     dt = datetime.strptime(f"{date_str} {time_str}", "%Y-%m-%d %H:%M")
@@ -91,6 +213,76 @@ def _tz_dt(date_str: str, time_str: str, plus_one: bool = False) -> str:
     # Asia/Tokyo(+09:00) のオフセット付きISO
     jst = timezone(timedelta(hours=9))
     return dt.replace(tzinfo=jst).isoformat()
+
+@app.get("/debug/java")
+async def debug_java():
+    """Java環境のデバッグ情報を取得"""
+    import subprocess
+    import os
+    
+    debug_info = {}
+    
+    # JAVA_HOME環境変数
+    debug_info["JAVA_HOME"] = os.environ.get("JAVA_HOME", "Not set")
+    
+    # PATH環境変数
+    debug_info["PATH"] = os.environ.get("PATH", "Not set")
+    
+    # Javaバージョン確認
+    try:
+        result = subprocess.run(["java", "-version"], capture_output=True, text=True, timeout=10)
+        debug_info["java_version"] = {
+            "stdout": result.stdout,
+            "stderr": result.stderr,
+            "returncode": result.returncode
+        }
+    except Exception as e:
+        debug_info["java_version"] = f"Error: {str(e)}"
+    
+    # jpype1の状態確認
+    try:
+        import jpype
+        debug_info["jpype_available"] = True
+        debug_info["jpype_version"] = jpype.__version__
+        
+        # JVMの起動テスト
+        try:
+            if not jpype.isJVMStarted():
+                jpype.startJVM()
+            debug_info["jvm_started"] = jpype.isJVMStarted()
+            debug_info["jvm_info"] = {
+                "version": jpype.java.lang.System.getProperty("java.version"),
+                "vendor": jpype.java.lang.System.getProperty("java.vendor"),
+                "home": jpype.java.lang.System.getProperty("java.home")
+            }
+        except Exception as e:
+            debug_info["jvm_error"] = str(e)
+            
+    except ImportError:
+        debug_info["jpype_available"] = False
+    except Exception as e:
+        debug_info["jpype_error"] = str(e)
+    
+    # tabula-pyのテスト
+    try:
+        import tabula
+        debug_info["tabula_available"] = True
+        debug_info["tabula_version"] = tabula.__version__
+        
+        # tabula-javaのjarファイルの場所を確認
+        try:
+            jar_path = tabula.io._jar_path()
+            debug_info["tabula_jar_path"] = jar_path
+            debug_info["tabula_jar_exists"] = os.path.exists(jar_path)
+        except Exception as e:
+            debug_info["tabula_jar_error"] = str(e)
+            
+    except ImportError:
+        debug_info["tabula_available"] = False
+    except Exception as e:
+        debug_info["tabula_error"] = str(e)
+    
+    return {"debug_info": debug_info}
 
 @app.get("/", response_class=HTMLResponse)
 async def index(request: Request):
@@ -104,33 +296,74 @@ async def api_upload(
     name: str = Form(...),
     year: int = Form(DEFAULT_YEAR),
 ):
+    print(f"[DEBUG] Upload started for user: {name.strip()}")
+    
+    # 古いjobファイルをクリーンアップ
+    _cleanup_old_jobs()
+    
     pdf_bytes = await file.read()
     try:
+        print(f"Processing PDF for user: {name.strip()}")
         df = read_pdf_table(pdf_bytes)
+        print(f"PDF table read successfully, shape: {df.shape}")
+        
         df, date_cols = normalize_table(df)
+        print(f"Table normalized, date columns: {date_cols}")
+        
         person_row, date_cols = extract_person_row(df, date_cols, name.strip())
+        print(f"Person row extracted for: {name.strip()}")
+        
         code_map = load_code_map(CODES_CSV)
+        print(f"Code map loaded with {len(code_map)} entries")
+        
         events, unknown = to_events(person_row, date_cols, code_map, year=year)
+        print(f"Events generated: {len(events)} events, {len(unknown)} unknown codes")
+        
     except Exception as e:
+        print(f"Error in API upload: {type(e).__name__}: {str(e)}")
+        import traceback
+        traceback.print_exc()
+        
         msg = str(e)
         if "No columns to parse from file" in msg:
             msg = "変換テーブルCSV（data/codes.default.csv）が空か見つかりません。"
         return JSONResponse({"error": msg}, status_code=400)
 
-    job_id = uuid4().hex
-    JOBS[job_id] = {
-        "uploader_name": name.strip(),
-        "events": events,            # [{date,start,end,end_plus1,title,code}]
-        "unknown_codes": unknown,    # 未知コード（今回スキップ）
-        "created": 0, "updated": 0, "skipped": 0, "deleted": 0,
-        "year": year,
-    }
-    return RedirectResponse(url=f"/preview?job_id={job_id}", status_code=303)
+    try:
+        job_id = uuid4().hex
+        job_data = {
+            "uploader_name": name.strip(),
+            "events": events,            # [{date,start,end,end_plus1,title,code}]
+            "unknown_codes": unknown,    # 未知コード（今回スキップ）
+            "created": 0, "updated": 0, "skipped": 0, "deleted": 0,
+            "year": year,
+        }
+        print(f"[DEBUG] Generated job_id: {job_id}")
+        print(f"[DEBUG] Job data has {len(events)} events")
+        print(f"[DEBUG] Session before save: {list(request.session.keys())}")
+        
+        # セッションに保存
+        _save_job_to_session(request, job_id, job_data)
+        
+        print(f"[DEBUG] Session after save: {list(request.session.keys())}")
+        print(f"[DEBUG] Redirecting to /preview?job_id={job_id}")
+        return RedirectResponse(url=f"/preview?job_id={job_id}", status_code=303)
+        
+    except Exception as e:
+        print(f"[DEBUG] Error saving job to session: {type(e).__name__}: {str(e)}")
+        import traceback
+        traceback.print_exc()
+        return JSONResponse({"error": f"セッション保存エラー: {str(e)}"}, status_code=500)
 
 @app.get("/preview", response_class=HTMLResponse)
 async def preview(request: Request, job_id: str):
-    job = JOBS.get(job_id)
+    print(f"[DEBUG] Preview endpoint called with job_id: {job_id}")
+    print(f"[DEBUG] Session data keys: {list(request.session.keys())}")
+    
+    job = _get_job_from_session(request, job_id)
+    
     if not job:
+        print(f"[DEBUG] Job {job_id} not found, raising 404")
         raise HTTPException(status_code=404, detail="job not found")
     authed = bool(request.session.get("credentials"))
     
@@ -224,7 +457,7 @@ def _get_calendar_service(request: Request):
 
 @app.post("/api/commit")
 async def api_commit(request: Request, job_id: str = Form(...), calendar_id: str = Form("primary")):
-    job = JOBS.get(job_id)
+    job = _get_job_from_session(request, job_id)
     if not job:
         raise HTTPException(status_code=404, detail="job not found")
 
@@ -247,11 +480,13 @@ async def api_commit(request: Request, job_id: str = Form(...), calendar_id: str
         created += 1
 
     job["created"] = created
+    # ファイルにjobデータを保存し直す
+    _save_job_to_file(job_id, job)
     return RedirectResponse(url=f"/result?job_id={job_id}", status_code=303)
 
 @app.get("/result", response_class=HTMLResponse)
 async def result(request: Request, job_id: str):
-    job = JOBS.get(job_id)
+    job = _get_job_from_session(request, job_id)
     if not job:
         raise HTTPException(status_code=404, detail="job not found")
     return templates.TemplateResponse("result.html", {"request": request, "job": job})
