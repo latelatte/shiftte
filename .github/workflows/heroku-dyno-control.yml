@@ -1,0 +1,72 @@
+name: Heroku Dyno Control
+
+on:
+  workflow_dispatch:
+    inputs:
+      action:
+        description: "start = web dyno を起動 / stop = 即停止"
+        required: true
+        type: choice
+        default: start
+        options:
+          - start
+          - stop
+  schedule:
+    # 毎日 18:00 UTC = 翌 03:00 JST に web dyno を強制停止(消し忘れ防止)
+    - cron: "0 18 * * *"
+
+concurrency:
+  group: heroku-dyno-control
+  cancel-in-progress: false
+
+jobs:
+  scale:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Resolve target quantity
+        id: target
+        run: |
+          case "${{ github.event_name }}" in
+            schedule)
+              quantity=0
+              label="auto-stop (cron)"
+              ;;
+            workflow_dispatch)
+              if [ "${{ inputs.action }}" = "start" ]; then
+                quantity=1
+                label="manual start"
+              else
+                quantity=0
+                label="manual stop"
+              fi
+              ;;
+            *)
+              echo "Unsupported event: ${{ github.event_name }}" >&2
+              exit 1
+              ;;
+          esac
+          echo "quantity=$quantity" >> "$GITHUB_OUTPUT"
+          echo "label=$label"       >> "$GITHUB_OUTPUT"
+
+      - name: Patch Heroku formation
+        env:
+          HEROKU_API_KEY: ${{ secrets.HEROKU_API_KEY }}
+          APP_NAME: ${{ secrets.HEROKU_APP_NAME }}
+          QUANTITY: ${{ steps.target.outputs.quantity }}
+        run: |
+          response=$(curl -fsS -w "\n%{http_code}" -X PATCH \
+            "https://api.heroku.com/apps/${APP_NAME}/formation/web" \
+            -H "Authorization: Bearer ${HEROKU_API_KEY}" \
+            -H "Accept: application/vnd.heroku+json; version=3" \
+            -H "Content-Type: application/json" \
+            -d "{\"quantity\": ${QUANTITY}}")
+          body=$(printf '%s\n' "$response" | sed '$d')
+          status=$(printf '%s\n' "$response" | tail -n1)
+          echo "HTTP $status"
+          echo "$body"
+          [ "$status" = "200" ] || exit 1
+
+      - name: Summary
+        run: |
+          echo "### ${{ steps.target.outputs.label }} → web=${{ steps.target.outputs.quantity }}" >> "$GITHUB_STEP_SUMMARY"
