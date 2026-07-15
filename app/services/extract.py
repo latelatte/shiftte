@@ -163,11 +163,18 @@ def normalize_table(df: pd.DataFrame) -> tuple[pd.DataFrame, List[str]]:
     # 1) 日付ヘッダを特定（M/D）
     date_cols = [c for c in df.columns if _looks_like_md(c)]
     if not date_cols:
-        # 先頭行に日付が並んでいて列名が NaN/Unnamed の場合、先頭行をヘッダに差し替え
-        first_row = df.iloc[0].astype(str).tolist()
-        if any(_looks_like_md(v) for v in first_row):
-            df.columns = [v.strip() for v in first_row]
-            df = df.iloc[1:].reset_index(drop=True)
+        # 日付行がヘッダにない場合（tabula が注記行をヘッダに拾う等）、
+        # 全行を走査して M/D が最も多く並ぶ行をヘッダに昇格し、それ以降をデータとする。
+        best_idx, best_count = None, 0
+        for idx in range(len(df)):
+            row_vals = df.iloc[idx].astype(str).tolist()
+            cnt = sum(_looks_like_md(v) for v in row_vals)
+            if cnt > best_count:
+                best_idx, best_count = idx, cnt
+        # 週の日付が横に並ぶので数本以上を要求（誤検出防止）
+        if best_idx is not None and best_count >= 3:
+            df.columns = [str(v).strip() for v in df.iloc[best_idx].tolist()]
+            df = df.iloc[best_idx + 1:].reset_index(drop=True)
             date_cols = [c for c in df.columns if _looks_like_md(c)]
 
     if not date_cols:
