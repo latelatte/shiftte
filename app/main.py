@@ -24,6 +24,11 @@ load_dotenv()
 if os.getenv("ENVIRONMENT") == "development":
     os.environ['OAUTHLIB_INSECURE_TRANSPORT'] = '1'
 
+# Google が過去に許可済みのスコープ（例: drive.appdata）を
+# include_granted_scopes により上乗せして返すことがあるため、
+# 要求スコープとの不一致で fetch_token が失敗するのを許容する。
+os.environ['OAUTHLIB_RELAX_TOKEN_SCOPE'] = '1'
+
 app = FastAPI()
 # セッションの設定をシンプルに
 app.add_middleware(
