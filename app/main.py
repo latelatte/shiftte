@@ -50,6 +50,9 @@ SCOPES = [
     "https://www.googleapis.com/auth/calendar.events",
     "https://www.googleapis.com/auth/calendar.readonly"
 ]
+# 抽出対象の氏名。自分のシフトしか要らないため入力欄を廃止し環境変数化。
+# 公開リポジトリに個人情報を残さないため、コードにハードコードしない。
+TARGET_NAME = os.getenv("SHIFT_TARGET_NAME", "").strip()
 CLIENT_ID = os.getenv("GOOGLE_CLIENT_ID")
 CLIENT_SECRET = os.getenv("GOOGLE_CLIENT_SECRET")
 # 本番環境とローカル環境でリダイレクトURIを切り替え
@@ -298,25 +301,30 @@ async def index(request: Request):
 async def api_upload(
     request: Request,
     file: UploadFile = File(...),
-    name: str = Form(...),
     year: int = Form(DEFAULT_YEAR),
 ):
-    print(f"[DEBUG] Upload started for user: {name.strip()}")
-    
+    if not TARGET_NAME:
+        return JSONResponse(
+            {"error": "抽出対象の氏名が未設定です。環境変数 SHIFT_TARGET_NAME を設定してください。"},
+            status_code=500,
+        )
+    name = TARGET_NAME
+    print(f"[DEBUG] Upload started for user: {name}")
+
     # 古いjobファイルをクリーンアップ
     _cleanup_old_jobs()
-    
+
     pdf_bytes = await file.read()
     try:
-        print(f"Processing PDF for user: {name.strip()}")
+        print(f"Processing PDF for user: {name}")
         df = read_pdf_table(pdf_bytes)
         print(f"PDF table read successfully, shape: {df.shape}")
-        
+
         df, date_cols = normalize_table(df)
         print(f"Table normalized, date columns: {date_cols}")
-        
-        person_row, date_cols = extract_person_row(df, date_cols, name.strip())
-        print(f"Person row extracted for: {name.strip()}")
+
+        person_row, date_cols = extract_person_row(df, date_cols, name)
+        print(f"Person row extracted for: {name}")
         
         code_map = load_code_map(CODES_CSV)
         print(f"Code map loaded with {len(code_map)} entries")
@@ -337,7 +345,7 @@ async def api_upload(
     try:
         job_id = uuid4().hex
         job_data = {
-            "uploader_name": name.strip(),
+            "uploader_name": name,
             "events": events,            # [{date,start,end,end_plus1,title,code}]
             "unknown_codes": unknown,    # 未知コード（今回スキップ）
             "created": 0, "updated": 0, "skipped": 0, "deleted": 0,
