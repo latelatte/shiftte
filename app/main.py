@@ -295,7 +295,7 @@ async def debug_java():
 @app.get("/", response_class=HTMLResponse)
 async def index(request: Request):
     authed = bool(request.session.get("credentials"))
-    return templates.TemplateResponse("index.html", {"request": request, "authed": authed})
+    return templates.TemplateResponse(request, "index.html", {"authed": authed})
 
 @app.post("/api/upload")
 async def api_upload(
@@ -400,12 +400,12 @@ async def preview(request: Request, job_id: str):
             print(f"カレンダーリスト取得エラー: {e}")
     
     return templates.TemplateResponse(
+        request,
         "preview.html",
         {
-            "request": request, 
-            "job_id": job_id, 
-            "job": job, 
-            "events": job["events"], 
+            "job_id": job_id,
+            "job": job,
+            "events": job["events"],
             "authed": authed,
             "calendars": calendars
         }
@@ -502,4 +502,4 @@ async def result(request: Request, job_id: str):
     job = _get_job_from_session(request, job_id)
     if not job:
         raise HTTPException(status_code=404, detail="job not found")
-    return templates.TemplateResponse("result.html", {"request": request, "job": job})
+    return templates.TemplateResponse(request, "result.html", {"job": job})
